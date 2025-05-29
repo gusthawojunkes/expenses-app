@@ -24,10 +24,16 @@
                     <input type="number" id="salary" placeholder="Informe seu salário mensal" min="0" step="0.01">
                 </div>
                 
-                <h3>Adicionar Categoria de Gasto</h3>
+                <h3>Adicionar Despesa</h3>
                 <div class="category-inputs">
-                    <input type="text" id="category-name" placeholder="Nome da categoria">
-                    <input type="number" id="category-value" placeholder="Valor (R$)" min="0" step="0.01">
+                    <input type="text" id="expense-name" placeholder="Nome da despesa">
+                    <input type="number" id="expense-value" placeholder="Valor (R$)" min="0" step="0.01">
+                </div>
+                <div class="category-select-container">
+                    <label for="category-select">Adicionar à categoria (opcional):</label>
+                    <select id="category-select">
+                        <option value="">Sem categoria</option>
+                    </select>
                 </div>
                 <div class="switch-container">
                     <span id="value-label" class="active"><i class="fas fa-dollar-sign"></i> R$</span>
@@ -37,10 +43,20 @@
                     </label>
                     <span id="percentage-label"><i class="fas fa-percentage"></i> %</span>
                 </div>
-                <button id="add-category">Adicionar Categoria</button>
+                <button id="add-expense">Adicionar Despesa</button>
+                
+                <div class="expenses-list" id="expenses-list">
+                    <div class="no-data">Nenhuma despesa adicionada</div>
+                </div>
+                
+                <h3>Criar Categoria</h3>
+                <div class="category-creation">
+                    <input type="text" id="new-category-name" placeholder="Nome da categoria">
+                    <button id="create-category" disabled>Criar Categoria</button>
+                </div>
                 
                 <div class="categories-list" id="categories-list">
-                    <div class="no-data">Nenhuma categoria adicionada</div>
+                    <div class="no-data">Nenhuma categoria criada</div>
                 </div>
                 
                 <div class="summary" id="summary">
@@ -78,17 +94,23 @@
     
     <script>
         let salary = 0;
+        let expenses = [];
         let categories = [];
         let chart = null;
+        let selectedExpenses = [];
         let budgetService = new BudgetService();
         
         const salaryInput = document.getElementById('salary');
-        const categoryNameInput = document.getElementById('category-name');
-        const categoryValueInput = document.getElementById('category-value');
+        const expenseNameInput = document.getElementById('expense-name');
+        const expenseValueInput = document.getElementById('expense-value');
+        const categorySelect = document.getElementById('category-select');
         const inputTypeSwitch = document.getElementById('input-type-switch');
         const valueLabel = document.getElementById('value-label');
         const percentageLabel = document.getElementById('percentage-label');
-        const addCategoryBtn = document.getElementById('add-category');
+        const addExpenseBtn = document.getElementById('add-expense');
+        const expensesList = document.getElementById('expenses-list');
+        const newCategoryNameInput = document.getElementById('new-category-name');
+        const createCategoryBtn = document.getElementById('create-category');
         const categoriesList = document.getElementById('categories-list');
         const summaryElement = document.getElementById('summary');
         const summarySalary = document.getElementById('summary-salary');
@@ -99,21 +121,26 @@
         function init() {
             const savedData = budgetService.initialize();
             salary = savedData.salary;
-            categories = savedData.categories;
+            categories = savedData.categories || [];
+            expenses = savedData.expenses || [];
             
             if (salary > 0) {
                 salaryInput.value = salary;
             }
             
             salaryInput.addEventListener('input', updateSalary);
-            addCategoryBtn.addEventListener('click', addCategory);
+            addExpenseBtn.addEventListener('click', addExpense);
+            createCategoryBtn.addEventListener('click', createCategory);
             inputTypeSwitch.addEventListener('change', updateInputType);
             document.getElementById('reset-data').addEventListener('click', resetBudgetData);
+            categorySelect.addEventListener('change', updateCategorySelection);
             
             initChart();
             
             updateInputType();
+            updateCategoryDropdown();
             
+            renderExpenses();
             renderCategories();
             updateSummary();
             updateChart();
@@ -123,11 +150,11 @@
             const isPercentage = inputTypeSwitch.checked;
             
             if (isPercentage) {
-                categoryValueInput.placeholder = 'Percentual (%)';
+                expenseValueInput.placeholder = 'Percentual (%)';
                 valueLabel.classList.remove('active');
                 percentageLabel.classList.add('active');
             } else {
-                categoryValueInput.placeholder = 'Valor (R$)';
+                expenseValueInput.placeholder = 'Valor (R$)';
                 valueLabel.classList.add('active');
                 percentageLabel.classList.remove('active');
             }
@@ -139,8 +166,11 @@
             
             budgetService.updateSalary(salary);
             
-            if (categories.length > 0) {
-                categories = budgetService.recalculateCategories(salary, categories);
+            if (expenses.length > 0 || categories.length > 0) {
+                const { updatedExpenses, updatedCategories } = budgetService.recalculateExpensesAndCategories(salary, expenses, categories);
+                expenses = updatedExpenses;
+                categories = updatedCategories;
+                renderExpenses();
                 renderCategories();
             }
             
@@ -148,18 +178,18 @@
             updateChart();
         }
         
-        function addCategory() {
-            const name = categoryNameInput.value.trim();
-            const inputValue = parseFloat(categoryValueInput.value) || 0;
+        function addExpense() {
+            const name = expenseNameInput.value.trim();
+            const inputValue = parseFloat(expenseValueInput.value) || 0;
             const isPercentage = inputTypeSwitch.checked;
             
             if (!name || inputValue <= 0) {
-                alert('Por favor, informe um nome de categoria e um valor válido.');
+                alert('Por favor, informe um nome de despesa e um valor válido.');
                 return;
             }
             
             if (isPercentage && salary <= 0) {
-                alert('Por favor, informe seu salário antes de adicionar categorias por percentual.');
+                alert('Por favor, informe seu salário antes de adicionar despesas por percentual.');
                 return;
             }
             
@@ -170,68 +200,322 @@
                 actualValue = (inputValue / 100) * salary;
             }
             
-            const newCategory = { 
+            const newExpense = { 
+                id: Date.now().toString(),
                 name, 
                 value: actualValue, 
                 percentage: isPercentage ? inputValue : (salary > 0 ? (actualValue / salary) * 100 : 0),
                 inputType: isPercentage ? 'percentage' : 'value',
-                originalValue: inputValue
+                originalValue: inputValue,
+                categoryId: categorySelect.value || null // Get selected category ID if any
             };
             
-            categories = budgetService.addCategory(newCategory, categories);
+            expenses = budgetService.addExpense(newExpense, expenses);
             
-            categoryNameInput.value = '';
-            categoryValueInput.value = '';
+            // If a category was selected, update the category's expense list
+            if (newExpense.categoryId) {
+                const categoryIndex = categories.findIndex(cat => cat.id === newExpense.categoryId);
+                if (categoryIndex !== -1) {
+                    const updatedCategory = {
+                        ...categories[categoryIndex],
+                        expenseIds: [...(categories[categoryIndex].expenseIds || []), newExpense.id],
+                        value: categories[categoryIndex].value + newExpense.value,
+                        percentage: salary > 0 ? ((categories[categoryIndex].value + newExpense.value) / salary) * 100 : 0
+                    };
+                    
+                    categories = [
+                        ...categories.slice(0, categoryIndex),
+                        updatedCategory,
+                        ...categories.slice(categoryIndex + 1)
+                    ];
+                    
+                    budgetService.updateCategories(categories);
+                }
+            }
             
+            expenseNameInput.value = '';
+            expenseValueInput.value = '';
+            
+            renderExpenses();
+            updateSummary();
+            updateChart();
+        }
+        
+        function removeExpense(id) {
+            // Check if expense is part of any category
+            const isInCategory = categories.some(category => 
+                category.expenseIds && category.expenseIds.includes(id)
+            );
+            
+            if (isInCategory) {
+                alert('Esta despesa está associada a uma categoria. Remova a categoria primeiro ou edite-a para remover esta despesa.');
+                return;
+            }
+            
+            // Remove from selected expenses if it was selected
+            selectedExpenses = selectedExpenses.filter(expenseId => expenseId !== id);
+            updateCreateCategoryButton();
+            
+            // Remove the expense
+            expenses = budgetService.removeExpense(id, expenses);
+            renderExpenses();
+            updateSummary();
+            updateChart();
+        }
+        
+        function toggleExpenseSelection(id) {
+            const index = selectedExpenses.indexOf(id);
+            if (index === -1) {
+                // Check if expense is already in a category
+                const expense = expenses.find(exp => exp.id === id);
+                if (expense.categoryId) {
+                    alert('Esta despesa já está em uma categoria.');
+                    return;
+                }
+                selectedExpenses.push(id);
+            } else {
+                selectedExpenses.splice(index, 1);
+            }
+            
+            renderExpenses(); // Update the UI to show selection state
+            updateCreateCategoryButton();
+        }
+        
+        function updateCreateCategoryButton() {
+            createCategoryBtn.disabled = selectedExpenses.length < 1;
+        }
+        
+        function createCategory() {
+            const name = newCategoryNameInput.value.trim();
+            
+            if (!name) {
+                alert('Por favor, informe um nome para a categoria.');
+                return;
+            }
+            
+            if (selectedExpenses.length === 0) {
+                alert('Por favor, selecione pelo menos uma despesa para criar uma categoria.');
+                return;
+            }
+            
+            categories = budgetService.createCategory(name, selectedExpenses, expenses, categories);
+            
+            // Mark expenses as categorized
+            expenses = expenses.map(expense => {
+                if (selectedExpenses.includes(expense.id)) {
+                    return { ...expense, categoryId: categories[categories.length - 1].id };
+                }
+                return expense;
+            });
+            budgetService.updateExpenses(expenses);
+            
+            // Clear selection and input
+            selectedExpenses = [];
+            newCategoryNameInput.value = '';
+            updateCreateCategoryButton();
+            
+            // Update category dropdown
+            updateCategoryDropdown();
+            
+            renderExpenses();
             renderCategories();
             updateSummary();
             updateChart();
         }
         
-        function removeCategory(index) {
-            categories = budgetService.removeCategory(index, categories);
+        function removeCategory(id) {
+            // Find the category
+            const category = categories.find(cat => cat.id === id);
+            if (!category) return;
+            
+            // Update expenses to remove category association
+            expenses = expenses.map(expense => {
+                if (category.expenseIds && category.expenseIds.includes(expense.id)) {
+                    return { ...expense, categoryId: null };
+                }
+                return expense;
+            });
+            budgetService.updateExpenses(expenses);
+            
+            // Remove the category
+            categories = categories.filter(cat => cat.id !== id);
+            budgetService.updateCategories(categories);
+            
+            // Update category dropdown
+            updateCategoryDropdown();
+            
+            renderExpenses();
             renderCategories();
             updateSummary();
             updateChart();
+        }
+        
+        function toggleCategoryExpansion(id) {
+            categories = categories.map(category => {
+                if (category.id === id) {
+                    return { ...category, isExpanded: !category.isExpanded };
+                }
+                return category;
+            });
+            budgetService.updateCategories(categories);
+            renderCategories();
+        }
+        
+        function updateCategoryDropdown() {
+            // Clear existing options except the first one
+            while (categorySelect.options.length > 1) {
+                categorySelect.remove(1);
+            }
+            
+            // Add categories to dropdown
+            categories.forEach(category => {
+                const option = document.createElement('option');
+                option.value = category.id;
+                option.textContent = category.name;
+                categorySelect.appendChild(option);
+            });
+        }
+        
+        function updateCategorySelection() {
+            // This function can be used to handle any logic when a category is selected
+            // For now, it's just a placeholder
+        }
+        
+        function renderExpenses() {
+            if (expenses.length === 0) {
+                expensesList.innerHTML = '<div class="no-data">Nenhuma despesa adicionada</div>';
+                return;
+            }
+            
+            expensesList.innerHTML = '';
+            
+            // Filter out expenses that are already in categories for the main list
+            const uncategorizedExpenses = expenses.filter(expense => !expense.categoryId);
+            
+            if (uncategorizedExpenses.length === 0) {
+                expensesList.innerHTML = '<div class="no-data">Todas as despesas estão em categorias</div>';
+                return;
+            }            
+            uncategorizedExpenses.forEach(expense => {
+                const percentage = salary > 0 ? ((expense.value / salary) * 100).toFixed(1) : 0;
+                
+                let valueDisplay;
+                if (expense.inputType === 'percentage') {
+                    valueDisplay = `${expense.originalValue.toFixed(1)}% (R$ ${expense.value.toFixed(2)})`;
+                } else {
+                    valueDisplay = `R$ ${expense.value.toFixed(2)} (${percentage}%)`;
+                }
+                
+                const isSelected = selectedExpenses.includes(expense.id);
+                
+                const expenseElement = document.createElement('div');
+                expenseElement.className = `expense-item ${isSelected ? 'selected' : ''}`;
+                expenseElement.innerHTML = `
+                    <div class="expense-info">
+                        <div class="expense-checkbox">
+                            <input type="checkbox" ${isSelected ? 'checked' : ''} id="expense-${expense.id}">
+                        </div>
+                        <div class="expense-name">${expense.name}</div>
+                        <div class="expense-value">${valueDisplay}</div>
+                    </div>
+                    <button class="remove-btn" data-id="${expense.id}"><i class="fas fa-trash"></i></button>
+                `;
+                
+                expensesList.appendChild(expenseElement);
+                
+                const checkbox = expenseElement.querySelector(`#expense-${expense.id}`);
+                checkbox.addEventListener('change', () => toggleExpenseSelection(expense.id));
+                
+                const removeBtn = expenseElement.querySelector('.remove-btn');
+                removeBtn.addEventListener('click', () => removeExpense(expense.id));
+            });
         }
         
         function renderCategories() {
             if (categories.length === 0) {
-                categoriesList.innerHTML = '<div class="no-data">Nenhuma categoria adicionada</div>';
+                categoriesList.innerHTML = '<div class="no-data">Nenhuma categoria criada</div>';
                 return;
             }
             
             categoriesList.innerHTML = '';
             
-            categories.forEach((category, index) => {
+            categories.forEach(category => {
                 const percentage = salary > 0 ? ((category.value / salary) * 100).toFixed(1) : 0;
-                
-                let valueDisplay;
-                if (category.inputType === 'percentage') {
-                    valueDisplay = `${category.originalValue.toFixed(1)}% (R$ ${category.value.toFixed(2)})`;
-                } else {
-                    valueDisplay = `R$ ${category.value.toFixed(2)} (${percentage}%)`;
-                }
+                const valueDisplay = `R$ ${category.value.toFixed(2)} (${percentage}%)`;
                 
                 const categoryElement = document.createElement('div');
                 categoryElement.className = 'category-item';
                 categoryElement.innerHTML = `
-                    <div class="category-info">
-                        <div class="category-name">${category.name}</div>
-                        <div class="category-value">${valueDisplay}</div>
+                    <div class="category-header">
+                        <div class="category-info">
+                            <button class="expand-btn ${category.isExpanded ? 'expanded' : ''}" data-id="${category.id}">
+                                <i class="fas ${category.isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>
+                            </button>
+                            <div class="category-name">${category.name}</div>
+                            <div class="category-value">${valueDisplay}</div>
+                        </div>
+                        <button class="remove-btn" data-id="${category.id}"><i class="fas fa-trash"></i></button>
                     </div>
-                    <button class="remove-btn" data-index="${index}">Remover</button>
                 `;
                 
+                // Add expenses container that will be shown/hidden
+                const expensesContainer = document.createElement('div');
+                expensesContainer.className = `category-expenses ${category.isExpanded ? 'expanded' : 'collapsed'}`;
+                
+                // Add a title for the expenses section
+                const expensesTitle = document.createElement('div');
+                expensesTitle.className = 'category-expenses-title';
+                expensesTitle.textContent = 'Despesas nesta categoria:';
+                expensesContainer.appendChild(expensesTitle);
+                
+                // Find all expenses in this category
+                const categoryExpenses = expenses.filter(expense => 
+                    category.expenseIds && category.expenseIds.includes(expense.id)
+                );
+                
+                if (categoryExpenses.length > 0) {
+                    categoryExpenses.forEach(expense => {
+                        const expensePercentage = salary > 0 ? ((expense.value / salary) * 100).toFixed(1) : 0;
+                        
+                        let expenseValueDisplay;
+                        if (expense.inputType === 'percentage') {
+                            expenseValueDisplay = `${expense.originalValue.toFixed(1)}% (R$ ${expense.value.toFixed(2)})`;
+                        } else {
+                            expenseValueDisplay = `R$ ${expense.value.toFixed(2)} (${expensePercentage}%)`;
+                        }
+                        
+                        const expenseItem = document.createElement('div');
+                        expenseItem.className = 'category-expense-item';
+                        expenseItem.innerHTML = `
+                            <div class="expense-name">${expense.name}</div>
+                            <div class="expense-value">${expenseValueDisplay}</div>
+                        `;
+                        
+                        expensesContainer.appendChild(expenseItem);
+                    });
+                } else {
+                    expensesContainer.innerHTML = '<div class="no-data">Nenhuma despesa nesta categoria</div>';
+                }
+                
+                categoryElement.appendChild(expensesContainer);
                 categoriesList.appendChild(categoryElement);
                 
+                const expandBtn = categoryElement.querySelector('.expand-btn');
+                expandBtn.addEventListener('click', () => toggleCategoryExpansion(category.id));
+                
                 const removeBtn = categoryElement.querySelector('.remove-btn');
-                removeBtn.addEventListener('click', () => removeCategory(index));
+                removeBtn.addEventListener('click', () => removeCategory(category.id));
             });
         }
         
         function updateSummary() {
-            const totalExpenses = categories.reduce((sum, category) => sum + category.value, 0);
+            // Calculate total from both uncategorized expenses and categories
+            const uncategorizedExpensesTotal = expenses
+                .filter(expense => !expense.categoryId)
+                .reduce((sum, expense) => sum + expense.value, 0);
+                
+            const categoriesTotal = categories.reduce((sum, category) => sum + category.value, 0);
+            const totalExpenses = uncategorizedExpensesTotal + categoriesTotal;
             const remaining = salary - totalExpenses;
             
             summarySalary.textContent = `R$ ${salary.toFixed(2)}`;
@@ -281,7 +565,7 @@
         function updateChart() {
             if (!chart) return;
             
-            if (salary <= 0 && categories.length === 0) {
+            if (salary <= 0 && expenses.length === 0 && categories.length === 0) {
                 chart.data.labels = ['Sem dados'];
                 chart.data.datasets[0].data = [1];
                 chart.data.datasets[0].backgroundColor = ['#ccc'];
@@ -289,12 +573,31 @@
                 return;
             }
             
-            const totalExpenses = categories.reduce((sum, category) => sum + category.value, 0);
-            const remaining = salary - totalExpenses;
+            // Get uncategorized expenses
+            const uncategorizedExpenses = expenses.filter(expense => !expense.categoryId);
             
-            const labels = categories.map(cat => cat.name);
-            const data = categories.map(cat => cat.value);
-            const backgroundColors = generateColors(categories.length);
+            // Prepare data for chart
+            const labels = [];
+            const data = [];
+            const backgroundColors = [];
+            
+            // Add categories
+            categories.forEach((category, index) => {
+                labels.push(category.name);
+                data.push(category.value);
+                backgroundColors.push(generateColors(1)[0]);
+            });
+            
+            // Add uncategorized expenses
+            uncategorizedExpenses.forEach((expense, index) => {
+                labels.push(expense.name);
+                data.push(expense.value);
+                backgroundColors.push(generateColors(categories.length + index + 1)[categories.length + index]);
+            });
+            
+            // Calculate remaining
+            const totalExpenses = [...categories, ...uncategorizedExpenses].reduce((sum, item) => sum + item.value, 0);
+            const remaining = salary - totalExpenses;
             
             if (remaining > 0) {
                 labels.push('Saldo Restante');
@@ -333,9 +636,13 @@
             if (confirm('Tem certeza que deseja limpar todos os dados do orçamento? Esta ação não pode ser desfeita.')) {
                 budgetService.clearBudgetData();
                 salary = 0;
+                expenses = [];
                 categories = [];
+                selectedExpenses = [];
                 salaryInput.value = '';
+                renderExpenses();
                 renderCategories();
+                updateCategoryDropdown();
                 updateSummary();
                 updateChart();
             }

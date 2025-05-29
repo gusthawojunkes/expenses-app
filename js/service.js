@@ -6,7 +6,8 @@ class BudgetService {
     initialize() {
         const salary = this.repository.getSalary();
         const categories = this.repository.getCategories();
-        return { salary, categories };
+        const expenses = this.repository.getExpenses();
+        return { salary, categories, expenses };
     }
 
     updateSalary(salary) {
@@ -27,27 +28,81 @@ class BudgetService {
     }
 
     updateCategories(categories) {
-        this.repository.saveCategories(categories);
+        this.repository.saveCategories(categories);        return categories;    }
+
+    addExpense(expense, currentExpenses) {
+        const updatedExpenses = [...currentExpenses, expense];
+        this.repository.saveExpenses(updatedExpenses);
+        return updatedExpenses;
     }
 
-    recalculateCategories(newSalary, categories) {
-        const updatedCategories = categories.map(category => {
-            if (category.inputType === 'percentage') {
-                const newValue = (category.originalValue / 100) * newSalary;
+    removeExpense(id, currentExpenses) {
+        const updatedExpenses = currentExpenses.filter(expense => expense.id !== id);
+        this.repository.saveExpenses(updatedExpenses);
+        return updatedExpenses;
+    }
+
+    updateExpenses(expenses) {
+        this.repository.saveExpenses(expenses);
+        return expenses;
+    }
+
+    createCategory(name, expenseIds, currentExpenses, currentCategories) {
+        // Create a new category with the selected expenses
+        const categoryExpenses = currentExpenses.filter(expense => expenseIds.includes(expense.id));
+        const totalValue = categoryExpenses.reduce((sum, expense) => sum + expense.value, 0);
+        const percentage = this.repository.getSalary() > 0 ? (totalValue / this.repository.getSalary()) * 100 : 0;
+        
+        const newCategory = {
+            id: Date.now().toString(),
+            name,
+            value: totalValue,
+            percentage,
+            expenseIds,
+            isExpanded: false
+        };
+        
+        const updatedCategories = [...currentCategories, newCategory];
+        this.repository.saveCategories(updatedCategories);
+        return updatedCategories;
+    }
+
+    recalculateExpensesAndCategories(newSalary, expenses, categories) {
+        // Recalculate percentages for expenses
+        const updatedExpenses = expenses.map(expense => {
+            if (expense.inputType === 'percentage') {
+                const newValue = (expense.originalValue / 100) * newSalary;
                 return {
-                    ...category,
+                    ...expense,
                     value: newValue,
-                    percentage: category.originalValue
+                    percentage: expense.originalValue
                 };
             }
             return {
-                ...category,
-                percentage: newSalary > 0 ? (category.value / newSalary) * 100 : 0
+                ...expense,
+                percentage: newSalary > 0 ? (expense.value / newSalary) * 100 : 0
             };
         });
-
+        
+        // Recalculate categories based on updated expenses
+        const updatedCategories = categories.map(category => {
+            const categoryExpenses = updatedExpenses.filter(expense => 
+                category.expenseIds && category.expenseIds.includes(expense.id)
+            );
+            const totalValue = categoryExpenses.reduce((sum, expense) => sum + expense.value, 0);
+            const percentage = newSalary > 0 ? (totalValue / newSalary) * 100 : 0;
+            
+            return {
+                ...category,
+                value: totalValue,
+                percentage
+            };
+        });
+        
+        this.repository.saveExpenses(updatedExpenses);
         this.repository.saveCategories(updatedCategories);
-        return updatedCategories;
+        
+        return { updatedExpenses, updatedCategories };
     }
 
     clearBudgetData() {
