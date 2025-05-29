@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Orçamento</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Gerenciador de Orçamento Pessoal</h1>
+            <p>Controle seus gastos e visualize a distribuição do seu salário</p>
+        </header>
+        
+        <div class="app-container">
+            <div class="input-section">
+                <h2>Informações de Orçamento</h2>
+                
+                <div class="form-group">
+                    <label for="salary">Salário Mensal (R$)</label>
+                    <input type="number" id="salary" placeholder="Informe seu salário mensal" min="0" step="0.01">
+                </div>
+                
+                <h3>Adicionar Categoria de Gasto</h3>
+                <div class="category-inputs">
+                    <input type="text" id="category-name" placeholder="Nome da categoria">
+                    <input type="number" id="category-value" placeholder="Valor (R$)" min="0" step="0.01">
+                </div>
+                <div class="switch-container">
+                    <span id="value-label" class="active"><i class="fas fa-dollar-sign"></i> R$</span>
+                    <label class="switch">
+                        <input type="checkbox" id="input-type-switch">
+                        <span class="slider round"></span>
+                    </label>
+                    <span id="percentage-label"><i class="fas fa-percentage"></i> %</span>
+                </div>
+                <button id="add-category">Adicionar Categoria</button>
+                
+                <div class="categories-list" id="categories-list">
+                    <div class="no-data">Nenhuma categoria adicionada</div>
+                </div>
+                
+                <div class="summary" id="summary">
+                    <div class="summary-item">
+                        <span>Salário:</span>
+                        <span id="summary-salary">R$ 0,00</span>
+                    </div>
+                    <div class="summary-item">
+                        <span>Total de Gastos:</span>
+                        <span id="summary-expenses">R$ 0,00</span>
+                    </div>
+                    <div class="summary-item total">
+                        <span>Saldo Restante:</span>
+                        <span id="summary-remaining">R$ 0,00</span>
+                    </div>
+                </div>
+                
+                <button id="reset-data" style="background-color: var(--danger); margin-top: 20px;">
+                    <i class="fas fa-trash"></i> Limpar Todos os Dados
+                </button>
+            </div>
+            
+            <div class="chart-section">
+                <h2>Distribuição do Orçamento</h2>
+                <div class="chart-container">
+                    <canvas id="budget-chart"></canvas>
+                </div>
+                <div id="chart-legend" class="chart-legend"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="js/repository.js"></script>
+    <script src="js/service.js"></script>
+    
+    <script>
+        let salary = 0;
+        let categories = [];
+        let chart = null;
+        let budgetService = new BudgetService();
+        
+        const salaryInput = document.getElementById('salary');
+        const categoryNameInput = document.getElementById('category-name');
+        const categoryValueInput = document.getElementById('category-value');
+        const inputTypeSwitch = document.getElementById('input-type-switch');
+        const valueLabel = document.getElementById('value-label');
+        const percentageLabel = document.getElementById('percentage-label');
+        const addCategoryBtn = document.getElementById('add-category');
+        const categoriesList = document.getElementById('categories-list');
+        const summaryElement = document.getElementById('summary');
+        const summarySalary = document.getElementById('summary-salary');
+        const summaryExpenses = document.getElementById('summary-expenses');
+        const summaryRemaining = document.getElementById('summary-remaining');
+        const chartCanvas = document.getElementById('budget-chart');
+        
+        function init() {
+            const savedData = budgetService.initialize();
+            salary = savedData.salary;
+            categories = savedData.categories;
+            
+            if (salary > 0) {
+                salaryInput.value = salary;
+            }
+            
+            salaryInput.addEventListener('input', updateSalary);
+            addCategoryBtn.addEventListener('click', addCategory);
+            inputTypeSwitch.addEventListener('change', updateInputType);
+            document.getElementById('reset-data').addEventListener('click', resetBudgetData);
+            
+            initChart();
+            
+            updateInputType();
+            
+            renderCategories();
+            updateSummary();
+            updateChart();
+        }
+        
+        function updateInputType() {
+            const isPercentage = inputTypeSwitch.checked;
+            
+            if (isPercentage) {
+                categoryValueInput.placeholder = 'Percentual (%)';
+                valueLabel.classList.remove('active');
+                percentageLabel.classList.add('active');
+            } else {
+                categoryValueInput.placeholder = 'Valor (R$)';
+                valueLabel.classList.add('active');
+                percentageLabel.classList.remove('active');
+            }
+        }
+        
+        function updateSalary() {
+            const newSalary = parseFloat(salaryInput.value) || 0;
+            salary = newSalary;
+            
+            budgetService.updateSalary(salary);
+            
+            if (categories.length > 0) {
+                categories = budgetService.recalculateCategories(salary, categories);
+                renderCategories();
+            }
+            
+            updateSummary();
+            updateChart();
+        }
+        
+        function addCategory() {
+            const name = categoryNameInput.value.trim();
+            const inputValue = parseFloat(categoryValueInput.value) || 0;
+            const isPercentage = inputTypeSwitch.checked;
+            
+            if (!name || inputValue <= 0) {
+                alert('Por favor, informe um nome de categoria e um valor válido.');
+                return;
+            }
+            
+            if (isPercentage && salary <= 0) {
+                alert('Por favor, informe seu salário antes de adicionar categorias por percentual.');
+                return;
+            }
+            
+            let actualValue;
+            if (!isPercentage) {
+                actualValue = inputValue;
+            } else {
+                actualValue = (inputValue / 100) * salary;
+            }
+            
+            const newCategory = { 
+                name, 
+                value: actualValue, 
+                percentage: isPercentage ? inputValue : (salary > 0 ? (actualValue / salary) * 100 : 0),
+                inputType: isPercentage ? 'percentage' : 'value',
+                originalValue: inputValue
+            };
+            
+            categories = budgetService.addCategory(newCategory, categories);
+            
+            categoryNameInput.value = '';
+            categoryValueInput.value = '';
+            
+            renderCategories();
+            updateSummary();
+            updateChart();
+        }
+        
+        function removeCategory(index) {
+            categories = budgetService.removeCategory(index, categories);
+            renderCategories();
+            updateSummary();
+            updateChart();
+        }
+        
+        function renderCategories() {
+            if (categories.length === 0) {
+                categoriesList.innerHTML = '<div class="no-data">Nenhuma categoria adicionada</div>';
+                return;
+            }
+            
+            categoriesList.innerHTML = '';
+            
+            categories.forEach((category, index) => {
+                const percentage = salary > 0 ? ((category.value / salary) * 100).toFixed(1) : 0;
+                
+                let valueDisplay;
+                if (category.inputType === 'percentage') {
+                    valueDisplay = `${category.originalValue.toFixed(1)}% (R$ ${category.value.toFixed(2)})`;
+                } else {
+                    valueDisplay = `R$ ${category.value.toFixed(2)} (${percentage}%)`;
+                }
+                
+                const categoryElement = document.createElement('div');
+                categoryElement.className = 'category-item';
+                categoryElement.innerHTML = `
+                    <div class="category-info">
+                        <div class="category-name">${category.name}</div>
+                        <div class="category-value">${valueDisplay}</div>
+                    </div>
+                    <button class="remove-btn" data-index="${index}">Remover</button>
+                `;
+                
+                categoriesList.appendChild(categoryElement);
+                
+                const removeBtn = categoryElement.querySelector('.remove-btn');
+                removeBtn.addEventListener('click', () => removeCategory(index));
+            });
+        }
+        
+        function updateSummary() {
+            const totalExpenses = categories.reduce((sum, category) => sum + category.value, 0);
+            const remaining = salary - totalExpenses;
+            
+            summarySalary.textContent = `R$ ${salary.toFixed(2)}`;
+            summaryExpenses.textContent = `R$ ${totalExpenses.toFixed(2)}`;
+            summaryRemaining.textContent = `R$ ${remaining.toFixed(2)}`;
+            
+            if (remaining < 0) {
+                summaryRemaining.style.color = 'var(--danger)';
+            } else {
+                summaryRemaining.style.color = 'var(--secondary)';
+            }
+        }
+        
+        function initChart() {
+            chart = new Chart(chartCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Sem dados'],
+                    datasets: [{
+                        data: [1],
+                        backgroundColor: ['#ccc'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.raw || 0;
+                                    const percentage = salary > 0 ? ((value / salary) * 100).toFixed(1) : 0;
+                                    return `${label}: R$ ${value.toFixed(2)} (${percentage}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateChart() {
+            if (!chart) return;
+            
+            if (salary <= 0 && categories.length === 0) {
+                chart.data.labels = ['Sem dados'];
+                chart.data.datasets[0].data = [1];
+                chart.data.datasets[0].backgroundColor = ['#ccc'];
+                chart.update();
+                return;
+            }
+            
+            const totalExpenses = categories.reduce((sum, category) => sum + category.value, 0);
+            const remaining = salary - totalExpenses;
+            
+            const labels = categories.map(cat => cat.name);
+            const data = categories.map(cat => cat.value);
+            const backgroundColors = generateColors(categories.length);
+            
+            if (remaining > 0) {
+                labels.push('Saldo Restante');
+                data.push(remaining);
+                backgroundColors.push('#2ecc71');
+            }
+            
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = data;
+            chart.data.datasets[0].backgroundColor = backgroundColors;
+            chart.update();
+        }
+        
+        function generateColors(count) {
+            const baseColors = [
+                '#3498db', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c',
+                '#d35400', '#2980b9', '#c0392b', '#16a085', '#8e44ad'
+            ];
+            
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                colors.push(baseColors[i % baseColors.length]);
+            }
+            
+            return colors;
+        }
+        
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('pt-BR', {
+                style: 'currency',
+                currency: 'BRL'
+            }).format(value);
+        }
+        
+        function resetBudgetData() {
+            if (confirm('Tem certeza que deseja limpar todos os dados do orçamento? Esta ação não pode ser desfeita.')) {
+                budgetService.clearBudgetData();
+                salary = 0;
+                categories = [];
+                salaryInput.value = '';
+                renderCategories();
+                updateSummary();
+                updateChart();
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
